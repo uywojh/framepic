@@ -1,0 +1,107 @@
+public interface IUserDao {
+    void save();
+}
+public class UserDao implements IUserDao {
+    public void save() {
+        System.out.println("已经保存数据...");
+    }
+}
+代理类
+public class UserDaoProxy implements IUserDao {
+    private IUserDao target;
+​
+    public UserDaoProxy(IUserDao iuserDao) {
+        this.target = iuserDao;
+    }
+​
+    public void save() {
+        System.out.println("开启事物...");
+        target.save();
+        System.out.println("关闭事物...");
+    }
+​
+}
+
+
+
+
+// 每次生成动态代理类对象时,实现了InvocationHandler接口的调用处理器对象 
+public class InvocationHandlerImpl implements InvocationHandler {
+    private Object target;// 这其实业务实现类对象，用来调用具体的业务方法
+    // 通过构造函数传入目标对象
+    public InvocationHandlerImpl(Object target) {
+        this.target = target;
+    }
+​
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        Object result = null;
+        System.out.println("调用开始处理");
+        result = method.invoke(target, args);
+        System.out.println("调用结束处理");
+        return result;
+    }
+​
+    public static void main(String[] args) throws NoSuchMethodException, SecurityException, InstantiationException,
+            IllegalAccessException, IllegalArgumentException, InvocationTargetException {
+        // 被代理对象
+        IUserDao userDao = new UserDao();
+        InvocationHandlerImpl invocationHandlerImpl = new InvocationHandlerImpl(userDao);
+        ClassLoader loader = userDao.getClass().getClassLoader();
+        Class<?>[] interfaces = userDao.getClass().getInterfaces();
+        // 主要装载器、一组接口及调用处理动态代理实例
+        IUserDao newProxyInstance = (IUserDao) Proxy.newProxyInstance(loader, interfaces, invocationHandlerImpl);
+        newProxyInstance.save();
+    }
+​
+}
+
+
+<aop:aspectj-autoproxy></aop:aspectj-autoproxy>  开启事物注解权限
+@Aspect                         指定一个类为切面类       
+@Pointcut("execution(* com.service.UserService.add(..))")  指定切入点表达式
+@Before("pointCut_()")              前置通知: 目标方法之前执行
+@After("pointCut_()")               后置通知：目标方法之后执行（始终执行）
+@AfterReturning("pointCut_()")       返回后通知： 执行方法结束前执行(异常不执行)
+@AfterThrowing("pointCut_()")           异常通知:  出现异常时候执行
+@Around("pointCut_()")              环绕通知： 环绕目标方法执行
+​
+​
+@Component
+@Aspect
+public class AopLog {
+​
+    // 前置通知
+    @Before("execution(* com.service.UserService.add(..))")
+    public void begin() {
+        System.out.println("前置通知");
+    }
+​
+​
+    // 后置通知
+    @After("execution(* com.service.UserService.add(..))")
+    public void commit() {
+        System.out.println("后置通知");
+    }
+​
+    // 运行通知
+    @AfterReturning("execution(* com.service.UserService.add(..))")
+    public void returning() {
+        System.out.println("运行通知");
+    }
+​
+    // 异常通知
+    @AfterThrowing("execution(* com.service.UserService.add(..))")
+    public void afterThrowing() {
+        System.out.println("异常通知");
+    }
+​
+    // 环绕通知
+    @Around("execution(* com.service.UserService.add(..))")
+    public void around(ProceedingJoinPoint proceedingJoinPoint) throws Throwable {
+        System.out.println("环绕通知开始");
+        proceedingJoinPoint.proceed();
+        System.out.println("环绕通知结束");
+    }
+}
+
+

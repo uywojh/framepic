@@ -1,0 +1,433 @@
+实现方式一：某个微服务承担配置刷新的职责
+
+1、提交配置触发post调用客户端A的bus/refresh接口
+
+2、客户端A接收到请求从Server端更新配置并且发送给Spring Cloud Bus总线
+
+3、Spring Cloud bus接到消息并通知给其它连接在总线上的客户端，所有总线上的客户端均能收到消息
+
+4、其它客户端接收到通知，请求Server端获取最新配置
+
+5、全部客户端均获取到最新的配置
+
+存在问题：
+
+1、打破了微服务的职责单一性。微服务本身是业务模块，它本不应该承担配置刷新的职责。2、破坏了微服务各节点的对等性。3、有一定的局限性。WebHook的配置随着承担刷新配置的微服务节点发生改变。
+
+改进如下方式二：配置中心Server端承担起配置刷新的职责
+
+1、提交配置触发post请求给server端的bus/refresh接口
+
+2、server端接收到请求并发送给Spring Cloud Bus总线
+
+3、Spring Cloud bus接到消息并通知给其它连接到总线的客户端
+
+4、其它客户端接收到通知，请求Server端获取最新配置
+
+5、全部客户端均获取到最新的配置
+
+三：实现步骤
+
+基本步骤：1、添加依赖 2、修改配置文件 3、添加注解
+
+1、添加依赖
+<!-- config-server依赖 -->
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-config-server</artifactId>
+</dependency>
+ 
+<!-- springcloud-bus依赖实现配置自动更新，rabbitmq -->
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-bus-amqp</artifactId>
+</dependency>
+
+2、修改配置文件Bootstrap.yml文件
+server:
+  port: 9090
+ 
+spring:
+  application:
+    name: config-server
+  cloud:                                                  #config服务端，从git拉取数据
+    config: 
+      server:
+        git:
+          uri: https://github.com/****/config-repo        # 配置git仓库的地址
+          username:                                       # git仓库的账号
+          password:                                       # git仓库的密码
+          search-paths: /*/*/*,/*                         #仓库下配置文件搜索路径
+  rabbitmq:                 #本地环境不需要配置mq，但是需要启动mq,Springboot会自动连接本地mq
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+ 
+eureka:                         #注册服务
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
+      #defaultZone: http://localhost:8761/eureka/,http://localhost:8762/eureka/ #eureka高可用  
+ 
+management:                    #SpringCloud 1.5版本暴露接口，暴露/bus-refresh接口
+  security:
+    enabled: false
+#  endpoints:                  #SpringCloud 2.0.0版本以后暴露接口方式
+#    web:
+#      exposure:
+#        include: "*"
+ 
+security:                       #是否开启基本的鉴权，默认为true
+  basic:
+    enabled: false
+
+
+
+3、启动类增加注解 @EnableConfigServer 至此Config-Server端已配置完毕
+
+<二>Config Client端配置
+1、添加依赖
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-config</artifactId>
+</dependency>
+ 
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-bus-amqp</artifactId>
+</dependency>
+ 
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
+
+2、修改配置文件Bootstrap.yml文件
+server:
+  port: 9092
+ 
+spring:
+  application:
+    name: config-client                         #对应微服务配置文件名称
+  cloud:
+    config:
+      uri: http://localhost:9090/                   #config server 端地址
+      profile: dev                                      #项目配置文件选择
+      label: master                                     #git仓库的分支
+      discovery:
+        enabled: true
+        service-id: config-server                       #config-server服务名称
+ 
+rabbitmq:                               #本地环境不需要配置mq
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+ 
+security:                                #
+  basic:
+    enabled: false
+
+3、添加注解： @RefreshScope添加在需要刷新的配置文件上
+注明：自动刷新只能刷新 @RefreshScope 注解下的配置，一些特殊配置，如数据库等，需要同样先设置数据库链接ConfigServer类，然后通过加 @RefreshScope 注解方式
+
+<三>配置git的webhook
+
+前面已准备就绪，启动Server端和Client端,要实现配置自动刷新需要调用/bus-refresh接口通知config-Server
+
+方式一：手动调用（post请求）：http://localhost:9090/bus/refresh(Server端地址) 推荐
+
+方式二：配置git的webhook ,当git端配置发生改变，自动调用/bus-refresh接口  需要外网地址暴露 安全性
+
+<四>附件
+config-client-dev.yml配置文件：
+spring:
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    url: jdbc:mysql://127.0.0.1:3306/test_mybatis_db?autoReconnect=true&useSSL=false&useUnicode=true&characterEncoding=UTF-8
+    username: root
+    password: 1234
+    driverClassName: com.mysql.jdbc.Driver
+    druid:
+      initialSize: 5
+      minIdle: 5
+      maxActive: 20
+      maxWait: 60000
+      timeBetweenEvictionRunsMillis: 60000
+      minEvictableIdleTimeMillis: 300000
+      validationQuery: SELECT 1
+      testWhileIdle: true
+      filters: stat,wall,log4j
+ 
+mybatis:
+  type-aliases-package: com.scnu.springcloudconfigclient.domain
+  mapper-locations: classpath*:mapper/*.xml
+ 
+eureka:                                 #注册服务
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
+ 
+custom:
+  username: guest-new
+  passwd: guest-new
+  
+profile: test-new
+
+数据库连接池
+package com.zzf.config;
+ 
+import com.mchange.v2.c3p0.ComboPooledDataSource;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.context.annotation.Bean;
+ 
+import javax.sql.DataSource;
+import java.beans.PropertyVetoException;
+ 
+@MapperScan("com.zzf.mapper")
+@SpringBootConfiguration
+public class DataSourceConfiguration {
+ 
+    @Value("${spring.datasource.driver-class-name}")
+    private String jdbcDriver;
+    @Value("${spring.datasource.url}")
+    private String jdbcUrl;
+    @Value("${spring.datasource.username}")
+    private String jdbcUser;
+    @Value("${spring.datasource.password}")
+    private String jdbcPassword;
+ 
+    @Bean
+    public DataSource createDataSource() throws PropertyVetoException {
+        ComboPooledDataSource dataSource = new ComboPooledDataSource();
+ 
+        dataSource.setDriverClass(jdbcDriver);
+        dataSource.setJdbcUrl(jdbcUrl);
+        dataSource.setUser(jdbcUser);
+        dataSource.setPassword(jdbcPassword);
+        // 关闭连接后不自动提交
+        dataSource.setAutoCommitOnClose(false);
+        
+        return dataSource;
+    }
+}
+
+config动态刷新使用场景 比如 接口的动态刷新
+
+
+config使用碰到的坑
+最后一个问题，@RefreshScope作用的类，不能是final类，否则启动时会报错，类似下面这堆：
+Caused by: java.lang.IllegalArgumentException: Cannot subclass final class TestUtil
+at org.springframework.cglib.proxy.Enhancer.generateClass(Enhancer.java:565) ~[spring-core-4.3.9.RELEASE.jar:4.3.9.RELEASE]
+
+从出错信息上看，底层应该是使用cglib进行增强，需要在TestUtil下派生子类。　
+然后，由cglib又引出了更一个坑，如果在一些web核心组件相关的config上误加了@RefreshScope, 比如下面这样：
+@Bean
+@RefreshScope
+public CorsFilter corsFilter() {
+    final UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    final CorsConfiguration config = new CorsConfiguration();
+    config.setAllowCredentials(true);
+    config.addAllowedOrigin("*");
+    config.addAllowedHeader("*");
+    config.addAllowedMethod("OPTIONS");
+    config.addAllowedMethod("HEAD");
+    config.addAllowedMethod("GET");
+    config.addAllowedMethod("PUT");
+    config.addAllowedMethod("POST");
+    config.addAllowedMethod("DELETE");
+    config.addAllowedMethod("PATCH");
+    source.registerCorsConfiguration("/**", config);
+    return new CorsFilter(source);
+}
+这里面有一个org.springframework.web.cors.CorsConfiguration配置类，加了@RefreshScope后，org.springframework.web.filter.GenericFilterBean#init 这个核心bean的init就会报错，要么应用启不起来，要么请求时报内部错误。
+
+最后，还有一个要注意的坑，比如:
+
+abc: "xxx"
+
+如果yml文件中有一个这样的属性，改成:
+
+abc: ""
+
+即变成空后，就算再curl -X POST  http://.../refresh 接口，代码中拿到的值，仍然是xxx，建议如果要让一个属性值失效，可以约定一个特定值，比如
+
+abc:"NULL"
+
+然后代码中用“NULL”来判断.
+
+
+<五>加解密
+
+引入：配置文件统一放在配置中心，配置中心文件明文存在不安全，容易泄露比如数据库用户名、密码等，如何实现git仓库配置文件为密文时，通过配置中心在Config-Server端进行解密。
+
+<一>对称加密
+
+1、JCE加密，Oracl官网下载，替换本机JDK下JRE的lib下在两个文件。
+
+https://www.oracle.com/technetwork/java/javase/downloads/jce-all-download-5170447.html
+
+2、
+
+a) Config-Server 端配置文件添加：
+encrypt:                                 #加密因子
+  key: foobar
+  加密因子为foobar，这里借助了Server端的加密，因此配置完毕需要启动Config-Server
+
+b) 启动Config-Server
+
+$ curl -X post http://localhost:9090/encrypt -d mysecret
+
+加密mysecret为密码，得到如下加密字串：
+
+682bc583f4641835fa2db009355293665d2647dade3375c0ee201de2a49f7bda
+
+c) 逆向操作：
+
+$ curl -X post http://localhost:9090/decrypt -d 682bc583f4641835fa2db009355293665d2647dade3375c0ee201de2a49f7bda
+
+解密得到：
+
+mysecret
+
+3、使用：
+
+a) Config-Server端配置文件中加入：
+
+encrypt: #加密因子foobar
+
+key: foobar
+
+b) Git仓库中配置文件caiyun-test-dev.yml
+
+profile: '{cipher}682bc583f4641835fa2db009355293665d2647dade3375c0ee201de2a49f7bda'
+
+备注：.properties文件吧引号去掉
+
+c) Config-client不需要做任何操作
+
+
+<二>非对称加密
+
+RSA算法
+
+1、命令行下执行
+
+$ keytool -genkeypair -alias mytestkey -keyalg RSA -dname "CN=Web Server,OU=Unit,O=Organization,L=City,S=State,C=US" -keypass changeme -keystore server.jks -storepass letmein
+
+执行完生成 server.jks 文件，加密文件
+
+2、将Server.jks 文件放在Config-Server的ClassPass路径下，
+
+Config-Server 端配置文件bootstrap.yml中添加：
+
+encrypt:
+  keyStore:
+    location: classpath:/server.jks     #生成在jks文件路径
+    password: letmein           #key store 秘钥
+    alias: mytestkey            #别名
+    secret: changeme            #私钥
+
+启动Config-Server
+
+3、加密
+
+$ curl -X post http://localhost:9090/encrypt -d caiyun-mima
+
+加密caiyun-mima，得到如下加密字串：
+
+682bc583f4641835fa2db009355293665d2647dade3375c0ee201de2a49f7bda
+
+4、使用：
+
+a）Config-Server端配置文件中加入：
+
+encrypt:
+  keyStore:
+    location: classpath:/server.jks     #生成在jks文件路径
+    password: letmein           #key store 秘钥
+    alias: mytestkey            #别名
+    secret: changeme            #私钥
+
+b) Git仓库中配置文件caiyun-test-dev.yml
+
+profile: '{cipher}682bc583f4641835fa2db009355293665d2647dade3375c0ee201de2a49f7bda'
+
+备注：.properties文件吧引号去掉
+
+c) Config-client不需要做任何操作
+
+
+
+package com.test;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.AsyncConfigurer;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.Executor;
+
+/**
+ * springboot异步线程池配置
+ * @author Scen
+ * @date 2018/11/7 18:28
+ */
+@Configuration
+@EnableAsync
+public class AsyncConfig implements AsyncConfigurer {
+    
+    
+    @Override
+    public Executor getAsyncExecutor() {
+        //定义线程池
+        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        //核心线程数
+        taskExecutor.setCorePoolSize(20);
+        //线程池最大线程数
+        taskExecutor.setMaxPoolSize(100);
+        //线程队列最大线程数
+        taskExecutor.setQueueCapacity(10);
+        //初始化
+        taskExecutor.initialize();
+        return taskExecutor;
+    }
+}
+
+
+spring.application.name=scen-task-test
+server.port=9009
+feign.hystrix.enabled=true
+#熔断器失败的个数==进入熔断器的请求达到1000时服务降级（之后的请求直接进入熔断器）
+hystrix.command.default.circuitBreaker.requestVolumeThreshold=1000
+#回退最大线程数
+hystrix.command.default.fallback.isolation.semaphore.maxConcurrentRequests=50
+#核心线程池数量
+hystrix.threadpool.default.coreSize=130
+#请求处理的超时时间
+hystrix.command.default.execution.isolation.thread.timeoutInMilliseconds=100000
+ribbon.ReadTimeout=120000
+#请求连接的超时时间
+ribbon.ConnectTimeout=130000
+eureka.instance.instance-id=${spring.application.name}:${spring.application.instance_id:${server.port}}
+eureka.instance.preferIpAddress=true
+eureka.client.service-url.defaultZone=http://127.0.0.1:9000/eureka
+logging.level.com.test.user.service=debug
+logging.level.org.springframework.boot=debug
+logging.level.custom=info
+
+
+2、服务熔断配置
+
+　　服务熔断的参数配置非常重要，合理的参数配置才能更好地利用好机器资源，既不会浪费，也能合理对服务进行熔断防止雪崩
+
+（1）熔断超时时间设置：这个时间一定要根据情况合理选择，不能太高也不能太低，如果设置太高，当服务出现问题时，每个线程都要等待很久，所有线程卡死就会导致用户根本无法正常使用，如果太小，出现网络波动就会影响服务质量，合理的设置一般是比如你的接口处理时间是200ms，那你可以设置300ms，比正常的响应时间大一点点，防止网络波动出现熔断
+hystrix.command.default.execution.isolation.thread.timeoutInMilliseconds: 300
+
+（2）Hystrix线程池大小设置：首先评估你的服务压力，比如你的服务每秒需要处理100个请求，每个请求的处理时间是200ms，相当于1个线程1秒可以处理5个请求，100/5=20，可以算出20个线程就可以处理请求，我们设置就可以设置25个线程，多给5个线程用来留些后路，防止一些特点时间点有大量的请求
+hystrix.threadpool.default.coreSize: 25
+
+　应对高并发，最重要还是先要保证业务逻辑的处理速度，才能从根本上优化，比如进行SQL查询时，尽量避免多表关联，SQL语句越简单越好，数据表加索引，不要使用外键，外键会在一定程度上影响性能，且不容易维护，我个人建议通过增加其他表的id字段来维护表之间的关系

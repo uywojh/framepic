@@ -1,0 +1,84 @@
+我们在实际项目中有些复杂运算、耗时操作，就可以利用多线程来充分利用CPU，提高系统吞吐量。SpringBoot对多线程支持非常好，对我们的开发非常便捷。
+
+  Future模式是多线程开发中非常常见的一种设计模式。核心思想是异步调用。当我们执行一个方法时，方法中有多个耗时任务需要同时去做，而且又不着急等待这个结果时可以让客户端立即返回然后，后台慢慢去计算任务。
+
+  当我们做一件事的时候需要等待，那么我们就可以在这个等待时间内来去做其它事情，这样就可以充分利用时间。比如我们点外卖，需要一段时间，那么我们在等外卖的时间里可以看点书，看个电影。这就是典型的Future模式。如果是普通模式的话，就是等外卖的时候就等外卖，外卖到了后再去看书，极大的浪费时间。
+
+  SpringBoot对Future模式支持非常好，只需要简单的代码就能实现。
+
+
+1.Future的相关方法
+
+boolean cancel(boolean mayInterruptIfRunning);
+//可以在任务执行过程中取消任务
+boolean isCancelled();
+//判断Future任务是否取消
+boolean isDone();
+//判断任务是否完成
+V get();//获取任务最终结果，这是一个阻塞方法，会等待任务执行好才会执行后面的代码
+V get(long timeout, TimeUnit unit);
+//有等待时常的get方法，等待时间到了后仍然没有计算完成，则抛异常
+2.需要的注解
+
+ springboot 配置多线程需要两个注解
+
+@EnableAsync
+
+在配置类中通过加@EnableAsync开启对异步任务的支持
+@Async
+
+在需要执行的方法上加@Async表明该方法是个异步方法，如果加在类级别上，则表明类所有的方法都是异步方法
+3.配置代码
+
+@Configuration
+@EnableAsync
+public class AsyncConfig implements AsyncConfigurer {
+
+    @Override
+    public Executor getAsyncExecutor() {
+        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        //核心线程数
+        taskExecutor.setCorePoolSize(8);
+        //最大线程数
+        taskExecutor.setMaxPoolSize(16);
+        //队列大小
+        taskExecutor.setQueueCapacity(100);
+        taskExecutor.initialize(); //这里还可以设置线程
+        return taskExecutor;
+    }
+}
+
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        // 设置核心线程数
+        executor.setCorePoolSize(5);
+        // 设置最大线程数
+        executor.setMaxPoolSize(10);
+        // 设置队列容量
+        executor.setQueueCapacity(20);
+        // 设置线程活跃时间（秒）
+        executor.setKeepAliveSeconds(60);
+        // 设置默认线程名称
+        executor.setThreadNamePrefix("hello-");
+        // 设置拒绝策略
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        // 等待所有任务结束后再关闭线程池
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        return executor;
+
+        
+4.FutureService
+
+@Service
+public class FutureService {
+
+    @Async
+    public Future<String> futureTest() throws InterruptedException {
+        System.out.println("任务执行开始,需要：1000ms");
+        for (int i = 0; i < 10; i++) {
+            Thread.sleep(100);
+            System.out.println("do:" + i);
+        }
+        System.out.println("完成任务");
+        return new AsyncResult<>(Thread.currentThread().getName());
+    }
+}

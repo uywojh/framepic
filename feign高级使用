@@ -1,0 +1,168 @@
+上篇简单的介绍了Feign的使用，本篇将结合注册中心，进行Feign的高级应用，案例中有三个角色：服务注册中心、服务提供者、服务消费者，注册中心为上篇的eureka单机版。
+
+具体高级应用为如下几条：
+
+1.使用feign进行服务间的调用
+2.feign开启Gzip压缩
+3.feign开启日志
+4.feign替换JDK默认的URLConnection为okhttp
+5.feign超时设置
+6.feign使用hystrix进行熔断、降级处理
+
+Spring Cloud Feign支持对请求与响应的压缩，以提高通信效率，在服务消费者配置文件开启压缩支持和压缩文件的类型即可
+
+#feign 请求与响应的压缩
+feign.compression.request.enabled=true
+feign.compression.response.enabled=true
+feign.compression.request.mime-types=text/xml,application/xml,application/json
+feign.compression.request.min-request-size=2048
+
+feign开启日志有两种方式，一种是使用配置文件，一种是使用java代码，下面将介绍代码方式
+创建FeignLogConfig类，添加一个LoggerBean
+@Configuration
+public class FeignLogConfig {
+
+    /**
+     * 日志level有4个级别
+     * 1.NONE，不记录任何日志
+     * 2.BASIC，仅记录请求方法、URL以及响应状态码和执行时间
+     * 3.HEADRES，除了BASIC以外的还会记录请求和响应的头信息
+     * 4.FULL,所有
+     * @return
+     */
+    @Bean
+    Logger.Level feignLogger(){
+        return Logger.Level.FULL;
+    }
+}
+
+feign替换JDK默认的URLConnection为okhttp
+使用okhttp，能提高qps，因为okhttp有连接池和超时时间进行调优
+在服务消费者中，添加feign-okhttp依赖
+<dependency>
+	<groupId>io.github.openfeign</groupId>
+	<artifactId>feign-okhttp</artifactId>
+</dependency>
+
+在配置文件中，禁用默认的http，启用okhttp
+feign.httpclient.enabled=false
+feign.okhttp.enabled=true
+
+创建OkHttpConfig类，添加okhttp的bean
+/**
+ * 配置okhttp与连接池
+ * ConnectionPool默认创建5个线程，保持5分钟长连接
+ */
+@Configuration
+@ConditionalOnClass(Feign.class)
+@AutoConfigureBefore(FeignAutoConfiguration.class)
+public class OkHttpConfig {
+
+    @Bean
+    public okhttp3.OkHttpClient okHttpClient(){
+        return new okhttp3.OkHttpClient.Builder()
+                //设置连接超时
+                .connectTimeout(10 , TimeUnit.SECONDS)
+                //设置读超时
+                .readTimeout(10 , TimeUnit.SECONDS)
+                //设置写超时
+                .writeTimeout(10 , TimeUnit.SECONDS)
+                //是否自动重连
+                .retryOnConnectionFailure(true)
+                .connectionPool(new ConnectionPool(10 , 5L, TimeUnit.MINUTES))
+                .build();
+    }
+}
+
+feign超时设置
+# feign启用hystrix，才能熔断、降级
+feign.hystrix.enabled=true
+
+# hystrix的超时时间
+hystrix.command.default.execution.timeout.enabled=true
+hystrix.command.default.execution.isolation.thread.timeoutInMilliseconds=10000
+
+# ribbon的超时时间
+ribbon.ReadTimeout=10000
+ribbon.ConnectTimeout=10000
+
+feign使用hystrix进行熔断、降级处理
+上面的超时时间设置为10秒，把服务提供者sleep睡眠时间大于10秒，服务消费者就会触发hystrix，进行熔断保护
+改造服务提供者，让服务睡眠60秒
+@RequestMapping("/hello")
+    public String hello(String name){
+        try {
+            //睡眠60秒，测试feign的熔断、降级
+            Thread.sleep(60 * 1000);
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+        return  "hello " + name;
+    }
+
+改造服务消费者，添加feign的熔断、降级方法，feign的hystrix熔断降级很好实现，只要在FeignClient的fallback回滚方法中指定那个实现类即可
+@FeignClient(name = "provider-service" , fallback = HelloFeignFallbackService.class)
+public interface HelloFeignService {
+
+    @RequestMapping(value = "/hello" , method = RequestMethod.GET)
+    String hello(@RequestParam("name") String name);
+}
+
+### http client最大连接数，默认200
+feign.httpclient.maxConnections = 200
+### 每个IP路由最大连接数量
+feign.httpclient.maxConnectionsPerRoute= 50
+### 连接存活时间
+feign.httpclient.timeToLive = 900
+### 连接存活时间单位
+feign.httpclient.timeToLiveUnit = SECONDS
+### 连接超时时间
+feign.httpclient.connectionTimeout = 2000
+### 连接超时定时器的执行频率
+fein.httpclient.connectionTimeout=3000
+
+
+
+@Configuration
+@ConditionalOnClass(Feign.class)
+@AutoConfigureBefore(FeignAutoConfiguration.class)
+public class FeignOkHttpConfig {
+    @Bean
+    public okhttp3.OkHttpClient okHttpClient(){
+        return new okhttp3.OkHttpClient.Builder()
+                .readTimeout(60,TimeUnit.SECONDS)
+                .connectTimeout(60,TimeUnit.SECONDS)
+                .connectionPool(new ConnectionPool())
+                .build();
+    }
+}
+
+
+feign:
+  okhttp:
+    enabled: true
+
+        <dependency>
+            <groupId>io.github.openfeign</groupId>
+            <artifactId>feign-okhttp</artifactId>
+        </dependency>
+
+# feign和ribbon结合，指定策略。feign默认的是轮询的策略，这里的配置可以自定义
+MICROSERVICE-ORDER:
+  ribbon:
+    NFLoadBalancerRuleClassName: com.netflix.loadbalancer.RandomRule
+
+ 在启动类上需要加上注解，首先是@EnableDiscoveryClient注解，然后再加上@EnableFeignClients注解来开启Feign功能。
+
+ 在使用feign做负载均衡的时候 需要创建一个接口，不需要编写这个接口的实现类，然后再在接口上加上@FeignClient注解，里面的name属性对应的为需要调用的服务的名字。
+
+ 然后需要编写接口内的方法，可以在这个方法上添加@RequestMapping的注解value指定方法的名字，method指定请求的方式，get，post等、restful风格
+
+ 在web层中使用@Autowired注解来注入那个接口的实例，在方法上使用@RequestMapping注解来注解名字和发送方式，然后调用接口里的方法即可。
+
+ 在application.properites的配置文件里，只需要指定注册中心的url，服务的名字，以及端口号即可。
+
+
+
+
+

@@ -1,0 +1,89 @@
+server:
+  port: 8100
+
+spring:
+  application:
+    name: gateway-service
+  redis:
+    database: 0
+    host: 192.168.0.1
+    port: 8200
+    password: 000000
+    timeout: 10000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 1
+        max-wait: 5000ms
+  cache:
+    type: REDIS
+  cloud:
+    gateway:
+      discovery: #是否与服务发现组件进行结合，通过 serviceId(必须设置成大写) 转发到具体的服务实例。默认为false，设为true便开启通过服务中心的自动根据 serviceId 创建路由的功能。
+        locator: #路由访问方式：http://Gateway_HOST:Gateway_PORT/大写的serviceId/**，其中微服务应用名默认大写访问。
+          enabled: true
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins: "http://docs.spring.io" #对于所有GET请求的路径，将允许来自docs.spring.io的请求的CORS请求。安全设置,真实线上环境视情况而定
+            allowedMethods:
+            - GET
+      routes:
+      - id: config
+        uri: lb://config-service
+        predicates:
+        - Path=/api/config-service/**
+        filters:
+        - StripPrefix=2
+        - name: Hystrix
+          args:
+            name: fallbackcmd
+            fallbackUri: forward:/fallback
+      - id: authorization
+        uri: lb://authorization-service
+        predicates:
+        - Path=/api/authorization-service/**
+        filters:
+        - StripPrefix=2 # 比如，请求/name/bar/foo，去除掉前面两个前缀之后，最后转发到目标服务的路径为/foo
+        - name: Hystrix
+          args:
+            name: fallbackcmd
+            fallbackUri: forward:/fallback
+        args:
+        name: fallbackcmd
+        fallbackUri: forward:/fallback
+      
+ribbon:   #配置ribbon超时时间以及重试次数 此处超时时间应该结合hystrix超时时间而定,要是ribbon的超时时间设置的比hystrix短,那么重试可正常执行,如果长则无法执行重试机制
+  ReadTimeout:  5000
+  ConnectTimeout: 5000
+  MaxAutoRetries: 0
+  MaxAutoRetriesNextServer: 0
+  OkToRetryOnAllOperations: false
+terminal-server:
+  robbin:
+    NFLoadBalancerRuleClassName:  cn.com.lenovo.ai.dm.www.gateway.rule.ConsistenceHashRule 
+    #这个配置的意思是，名叫terminal-server服务使用ConsistenceHashRule这个负载策略（其他服务依然使用默认的负载策略，spring cloud ribbon提供的默认负载策略是这个类com.netfli.#loadbalancer.ZoneAvoidanceRule）。所以这块如果没有特殊的要求可以直接使用默认的策略按区域来负载
+
+hystrix:
+  command:
+    fallbackcmd:
+      execution:
+        isolation:
+          thread:
+            timeoutInMilliseconds: 5000
+  circuitBreaker:
+    sleepWindowInMilliseconds:  5000
+
+logging:
+  config: classpath:spring-logback.xml
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://192.168.1.1:8000/eureka
+    registryFetchIntervalSeconds: 5
+  instance:
+    prefer-ip-address: true
+
+

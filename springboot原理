@@ -1,0 +1,21 @@
+// 默认容器实现
+DefaultListableBeanFactory beanRegistry = new DefaultListableBeanFactory();
+// 根据业务对象构造相应的BeanDefinition
+AbstractBeanDefinition definition = new RootBeanDefinition(Business.class,true);
+// 将bean定义注册到容器中
+beanRegistry.registerBeanDefinition("beanName",definition);
+// 如果有多个bean，还可以指定各个bean之间的依赖关系
+// ........
+
+// 然后可以从容器中获取这个bean的实例
+// 注意：这里的beanRegistry其实实现了BeanFactory接口，所以可以强转，
+// 单纯的BeanDefinitionRegistry是无法强制转换到BeanFactory类型的
+BeanFactory container = (BeanFactory)beanRegistry;
+Business business = (Business)container.getBean("beanName");
+
+（1）IOC之容器启动阶段
+这个阶段主要会进行：加载配置文件并解析，然后将解析后的数据封装为BeanDefinition实例，最后把这些保存了bean定义的BeanDefinition，注册到相应的BeanDefinitionRegistry，这样容器的启动工作就完成了。当然这个过程还包含了其他很多操作。
+（2）IOC之容器实例化阶段
+当某个请求通过容器的getBean方法请求某个对象，或者因为依赖关系容器需要隐式的调用getBean时，就会触发第二阶段的活动：容器会首先检查所请求的对象之前是否已经实例化完成。如果没有，则会根据注册的BeanDefinition所提供的信息实例化被请求对象，并为其注入依赖。当该对象装配完毕后，容器会立即将其返回给请求方法使用。
+
+而在实际场景下，我们更多的使用另外一种类型的容器：ApplicationContext，它构建在BeanFactory之上，属于更高级的容器，除了具有BeanFactory的所有能力之外，还提供对事件监听机制以及国际化的支持等。它管理的bean，在容器启动时全部完成初始化和依赖注入操作。
