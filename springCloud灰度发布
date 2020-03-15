@@ -1,0 +1,88 @@
+   灰度发布的特性是混合部署，多版本共存，平滑升级，如果升级失败可以回滚至上一版本，新版本上线无需提供全套其余服务，节省资源。核心思想是，通过用户特定标识（ parameter 、header、body、ip、id），根据路由策略，将请求引流到不同版本的服务上。
+
+接入层的三种方案
+1、nginx+lua
+
+       参考逻辑架构图，用户携带标识，最外层nginx的lua脚本添加控制策略，解析出导流标识，网关根据导流标识分发至不同版本服务。
+       优点：
+
+①zuul无须负载策略压力，对于服务来讲灰度动作为黑盒，无须关心。
+
+②即使没有加入服务中心的应用也可以通过nginx来做灰度。
+
+缺点：
+
+①内部请求无法控制灰度，比如Service1的v1需要请求Sservice2的v2。
+
+②对于nginx来说，必须需要访问服务中心获取服务信息，否则服务集群情况相当于黑盒。
+
+我们通过在Spring Cloud Gateway中会配置不同的权重信息到不同URL上，Spring Cloud Gateway会根据我们配置的路由权重信息，将请求分发到不同的源服务组，权重信息如ch4/ch4-gateway中的application.yml所示，主要配置信息如下。
+
+spring:
+cloud:
+gateway:
+discovery:
+locator:
+enabled:true
+routes:
+
+- id: order-service1
+uri: lb://order/order/create1
+order: 8000
+predicates:
+- Path=/order/create
+filters:
+- StripPrefix=1
+- Weight=order-service, 95
+
+- id: order-service2
+uri: lb://order/create2
+order: 8000
+predicates:
+- Path=/order/create
+filters:
+- StripPrefix=1
+- Weight=order-service, 5
+
+Weight=order-service1, 95，Weight=service1, 5就是路由的权重信息。
+
+第二、源服务配置
+源服务在本案例中为order模块源服务，主要提提供Gateway Server权重路由对应的后端源服务。因为比较简单因此不做详细说明，主要代码如下所示。
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+publicclassOrderController {
+@RequestMapping("/create1")
+public String orderCreateV1() {
+//此处写业务逻辑代码
+return "success";
+}
+@RequestMapping( "/ceate2")
+public String v2() {
+//此处写业务逻辑代码
+return “success”;
+}
+}
+第三、进行测试
+分别启动gateway，order进行访问:http://localhost:5001/order/create 测试，发现会根据所设权重进行路由。
+第四，使用zookeeper config实现动态权重路由
+到第三步完成以后，现在可以通过修改配置的如何根据现有的服务在线动态更新权重呢？使用zookeeper作为spring cloud的注册和配置中心，gateway模块和order模块配置监控配置的变化，如果想做动态灰度发布，增加后台在线配置管理界面，并在线修改gateway的配置，实现动态的灰度发布，而不用每次修改都要重新启动gateway。
+spring:
+cloud:
+zookeeper:
+enabled:true
+connect-string: localhost:2181
+config:
+root: /config
+enabled:true
+watcher:
+enabled:true
+第五，使用zkui进行配置修改
+使用ZKUI来可视化管理Zookeeper，登录ZKUI->import 选择对应文件导入即可。ZKUI安装使用请自行百度。
+以上就是我使用spring cloud进行灰度发布的过程记录。
+作者最新文章
+微服务架构实践：从零搭建网站扫码登录
+一次性能优化：吞吐量从1提升到2500
+微服务架构：如何用十步解耦你的系统？
+
+

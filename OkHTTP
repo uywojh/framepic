@@ -1,0 +1,87 @@
+三次握手 通过序列码以及相应码的相互确认认证当前请求,通过后允许建立连接并允许传输内容
+内容传输完毕,通过四次分手的操作,同样是为了确认是否是真正的当前的连接决定要断开连接而不是伪造的
+
+所以当大量的3次握手以及4次分手操作是很影响性能的 因此http有一种叫做keepaliveconnections的机制 他可以在传输数据后仍然保持连接
+直接使用刚刚空闲下来的连接而不需要再次握手
+
+okhttp支持5个keepalive默认链路的生命为五分钟 链路空闲后保持的存活时间
+
+2.连接池（ConnectionPool）分析
+
+在okhttp中，在高层代码的调用中，使用了类似于引用计数的方式跟踪Socket流的调用，这里的计数对象是StreamAllocation，它被反复执行aquire与release操作，这两个函数其实是在改变RealConnection中的List<Reference<StreamAllocation>> 的大小。（StreamAllocation.Java）
+
+RealConnection是socket物理连接的包装，它里面维护了List<Reference<StreamAllocation>>的引用。List中StreamAllocation的数量也就是socket被引用的计数，如果计数为0的话，说明此连接没有被使用就是空闲的，需要通过下文的算法实现回收；如果计数不为0，则表示上层代码仍然引用，就不需要关闭连接。
+
+连接池的类位于okhttp3.ConnectionPool：
+private static final Executor executor = new ThreadPoolExecutor(0 /* corePoolSize */,
+      Integer.MAX_VALUE /* maximumPoolSize */, 60L /* keepAliveTime */, TimeUnit.SECONDS,
+      new SynchronousQueue<Runnable>(), Util.threadFactory("OkHttp ConnectionPool", true));
+
+  /** The maximum number of idle connections for each address. */
+  //空闲的socket最大连接数
+  private final int maxIdleConnections;
+  //socket的keepAlive时间
+  private final long keepAliveDurationNs;
+  // 双向队列
+  private final Deque<RealConnection> connections = new ArrayDeque<>();
+  final RouteDatabase routeDatabase = new RouteDatabase();
+  boolean cleanupRunning;
+
+  主要的变量有必要说明一下：
+
+executor线程池，类似于CachedThreadPool，需要注意的是这种线程池的工作队列采用了没有容量的SynchronousQueue，不了解它的请查看Java并发编程（六）阻塞队列这篇文章。
+Deque<RealConnection>，双向队列，双端队列同时具有队列和栈性质，经常在缓存中被使用，里面维护了RealConnection也就是socket物理连接的包装。
+RouteDatabase，它用来记录连接失败的Route的黑名单，当连接失败的时候就会把失败的线路加进去。
+
+public ConnectionPool() {
+  //默认空闲的socket最大连接数为5个，socket的keepAlive时间为5秒
+    this(5, 5, TimeUnit.MINUTES);
+  }
+  public ConnectionPool(int maxIdleConnections, long keepAliveDuration, TimeUnit timeUnit) {
+    this.maxIdleConnections = maxIdleConnections;
+    this.keepAliveDurationNs = timeUnit.toNanos(keepAliveDuration);
+
+    // Put a floor on the keep alive duration, otherwise cleanup will spin loop.
+    if (keepAliveDuration <= 0) {
+      throw new IllegalArgumentException("keepAliveDuration <= 0: " + keepAliveDuration);
+    }
+  }
+
+  通过构造函数可以看出ConnectionPool默认的空闲的socket最大连接数为5个，socket的keepAlive时间为5秒。
+
+  缓存操作
+
+ConnectionPool提供对Deque<RealConnection>进行操作的方法分别为put、get、connectionBecameIdle和evictAll几个操作。分别对应放入连接、获取连接、移除连接和移除所有连接操作，这里我们举例put和get操作。
+
+put操作
+
+void put(RealConnection connection) {
+    assert (Thread.holdsLock(this));
+    if (!cleanupRunning) {
+      cleanupRunning = true;
+      executor.execute(cleanupRunnable);
+    }
+    connections.add(connection);
+  }
+
+在添加到Deque<RealConnection>之前首先要清理空闲的线程，这个后面会讲到。
+
+get操作
+
+RealConnection get(Address address, StreamAllocation streamAllocation) {
+    assert (Thread.holdsLock(this));
+    for (RealConnection connection : connections) {
+      if (connection.allocations.size() < connection.allocationLimit
+          && address.equals(connection.route().address)
+          && !connection.noNewStreams) {
+        streamAllocation.acquire(connection);
+        return connection;
+      }
+    }
+    return null;
+  }
+  遍历connections缓存列表，当某个连接计数的次数小于限制的大小并且request的地址和缓存列表中此连接的地址完全匹配。则直接复用缓存列表中的connection作为request的连接。
+
+总结
+
+可以看出连接池复用的核心就是用Deque<RealConnection>来存储连接，通过put、get、connectionBecameIdle和evictAll几个操作来对Deque进行操作，另外通过判断连接中的计数对象StreamAllocation来进行自动回收连接。
